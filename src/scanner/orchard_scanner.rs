@@ -99,7 +99,7 @@ impl OrchardScanner {
 
         // Create domain
         let domain = OrchardDomain::for_compact_action(&compact_action);
-
+        
         // Try to decrypt
         match try_compact_note_decryption(&domain, &self.prepared_ivk, &compact_action) {
             Some((note, recipient)) => {
