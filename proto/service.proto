@@ -1,0 +1,23 @@
+
+syntax = "proto3";
+package cash.z.wallet.sdk.rpc;
+
+import "compact_formats.proto";
+
+service CompactTxStreamer {
+    rpc GetLatestBlock(ChainSpec) returns (BlockID) {}
+    rpc GetBlock(BlockID) returns (CompactBlock) {}
+    rpc GetBlockRange(BlockRange) returns (stream CompactBlock) {}
+}
+
+message ChainSpec {}
+
+message BlockID {
+    uint64 height = 1;
+    bytes hash = 2;
+}
+
+message BlockRange {
+    BlockID start = 1;
+    BlockID end = 2;
+}

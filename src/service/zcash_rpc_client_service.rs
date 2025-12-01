@@ -1,0 +1,212 @@
+// call rpc client getwallet
+
+// make new account
+// associate account with business functions
+//
+
+use crate::client::{
+    wallet::{BlockId, CompactBlock, CompactTx},
+    zcash_rpc_client::BlockchainInfo,
+};
+use actix_web::{App, HttpServer, web};
+use anyhow::{Context, Result, bail};
+use reimagined_pancake_listener::scanner::{OrchardScanner, orchard_scanner};
+use std::io::Error;
+//use zcash_primitives::consensus::Network;
+use clap::Parser;
+//use client::zcash_rpc_client::ZcashRpcClient;
+//use crate::client::ZcashRpcClient;
+use crate::client::LightwalletdClient;
+//use crate::scanner::OrchardScanner;
+use std::env;
+use zcash_address::unified::Container;
+use zcash_address::unified::Encoding;
+use zcash_address::{Network, unified};
+pub struct ZCashRpcClientService {
+    //pub rpc_client: ZcashRpcClient,
+    pub rpc_client: LightwalletdClient,
+    pub orchard_scanner: OrchardScanner,
+}
+
+#[derive(Parser)]
+#[command(name = "ufvk-scanner")]
+#[command(about = "Scan Zcash blockchain for UFVK balance with REAL data", long_about = None)]
+struct Cli {
+    /// Unified Full Viewing Key
+    #[arg(
+        short,
+        long,
+        default_value = ""
+    )]
+    ufvk: String,
+
+    /// Lightwalletd server URL
+    #[arg(short, long, default_value = "https://testnet.zec.rocks:443")]
+    server: String,
+
+    /// Network (testnet or mainnet)
+    #[arg(short, long, default_value = "testnet")]
+    network: String,
+
+    /// Number of blocks to scan (default: 1000)
+    #[arg(short, long, default_value = "10000")]
+    blocks: u64,
+
+    /// Bridge address for context
+    #[arg(short, long, 
+      
+    )]
+    address: Option<String>,
+}
+
+impl ZCashRpcClientService {
+    pub async fn new() -> Result<Self> {
+        let cli = Cli::parse();
+
+        println!("\n=========================================");
+        println!("   Hydex UFVK Real Balance Scanner");
+        println!("=========================================\n");
+
+        // Parse network
+        let network = Network::Test;
+
+        println!("Network:     {:?}", network);
+        println!("Server:      {}", cli.server);
+        println!("Scan depth:  {} blocks\n", cli.blocks);
+
+        // Decode UFVK
+        println!("=== Step 1: Decoding UFVK ===");
+
+        let client = match LightwalletdClient::connect(cli.server.clone()).await {
+            Ok(c) => {
+                println!("✓");
+                c
+            }
+            Err(e) => {
+                println!("✗");
+                println!("\n❌ Failed to connect: {}\n", e);
+                println!("💡 Common issues:");
+                println!("   • Server might be down");
+                println!("   • Try a different server:");
+                println!("     --server https://lightwalletd.testnet.electriccoin.co:9067");
+                println!("   • Check your internet connection");
+                return Err(e);
+            }
+        };
+
+        // Decode UFVK
+        println!("=== Step 1: Decoding UFVK ===");
+        let decoded = match unified::Ufvk::decode(&cli.ufvk) {
+            Ok((parsed_net, ufvk)) => {
+                if parsed_net != network {
+                    bail!("Network mismatch");
+                }
+                println!("✓ UFVK valid for {:?}", parsed_net);
+                ufvk
+            }
+            Err(e) => bail!("Invalid UFVK: {:?}", e),
+        };
+
+        // Extract Orchard FVK
+        let mut orchard_fvk_bytes: Option<[u8; 96]> = None;
+        for item in decoded.items() {
+            if let unified::Fvk::Orchard(bytes) = item {
+                if bytes.len() == 96 {
+                    let mut arr = [0u8; 96];
+                    arr.copy_from_slice(&bytes);
+                    orchard_fvk_bytes = Some(arr);
+                    println!("✓ Orchard FVK extracted (96 bytes)");
+                    break;
+                }
+            }
+        }
+
+        let fvk_bytes =
+            orchard_fvk_bytes.ok_or_else(|| anyhow::anyhow!("No Orchard FVK in UFVK"))?;
+
+        // Create scanner
+        //let mut scanner = OrchardScanner::new(&fvk_bytes)?;
+        println!("✓ Scanner initialized\n");
+        let mut orchard_scanner = OrchardScanner::new(&fvk_bytes)?;
+
+        // 🚀 RETURN THE SERVICE INSTANCE
+        Ok(Self {
+            rpc_client: client,
+            orchard_scanner: orchard_scanner,
+        })
+    }
+
+    pub async fn emit_orchard(&mut self, data: Vec<u8>, height: u64) -> Result<CompactBlock> {
+        let req = BlockId {
+            height,
+            hash: vec![], // optional
+        };
+
+        let block = &mut self.rpc_client.get_block(req).await?.into_inner();
+        // for tx in &block.vtx {
+        //     //println!("{}",hex::encode(&tx.hash));
+        //     let orchardActions = &tx.actions;
+        //     for orchard in orchardActions {
+        //         let decryptOP = &mut self.orchard_scanner.try_decrypt_action(
+        //             &orchard.nullifier,
+        //             &orchard.cmx,
+        //             &orchard.ephemeral_key,
+        //             &orchard.ciphertext
+        //         );
+        //         println!("decryptOp: {:?}",decryptOP);
+        //     }
+        // }
+        for tx in &block.vtx {
+            // Scan each Orchard action
+            for action in &tx.actions {
+                //result.actions_scanned += 1;
+                //result.decryption_attempts += 1;
+
+                // Try to decrypt
+                if let Some(value) = self.orchard_scanner.try_decrypt_action(
+                    &action.nullifier,
+                    &action.cmx,
+                    &action.ephemeral_key,
+                    &action.ciphertext,
+                    Network::Test,
+                ) {
+                    //result.received_value += value;
+                    //result.received_count += 1;
+                    println!("  ✓ Found note: {:?}", value);
+                }
+                else{
+                    println!("Failed to load Decrpted zatoshis")
+                }
+            }
+        }
+        Ok(block.clone())
+    }
+}
+// impl zcash_rpc_client_service{
+
+// }
+
+// impl zcash_rpc_client_service {
+
+//     pub fn new(){}
+// }
+
+// pub async fn ping() -> String {
+//     "Ping".to_string()
+// }
+
+//     pub async fn emit_orchard(
+//     block_hash: &str,
+// ) -> String{
+//     let block = rpc_client.getblock(block_hash).await;
+//     "".to_string()
+// }
+
+// let mut nf_bytes = [0u8; 32];
+//         nf_bytes.copy_from_slice(nullifier);
+
+//         let mut cmx_bytes = [0u8; 32];
+//         cmx_bytes.copy_from_slice(cmx);
+
+//         let mut epk_bytes = [0u8; 32];
+//         epk_bytes.copy_from_slice(ephemeral_key);

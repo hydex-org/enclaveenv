@@ -203,3 +203,36 @@ async fn generate_deposit_address(
         solana_pubkey: req.solana_pubkey,
     }))
 }
+
+// use actix_web::{web, App, HttpServer};
+// use crate::controller::{ZCashController, emit_orchard, zcash_controller};
+// //use crate::
+// //use crate::client::zcash_rpc_client::BlockchainInfo;
+// mod controller;
+// mod service;
+// mod client;
+
+// use std::sync::Arc;
+
+// #[actix_web::main]
+// async fn main() -> std::io::Result<()> {
+//     println!("Starting server locally...");
+
+
+//     let zcash_controller = Arc::new(ZCashController::new().await.unwrap());
+
+//     HttpServer::new(
+//         move || {
+//             App::new()
+//             .app_data(web::Data::new(zcash_controller.clone()))
+//             //.service(ping)
+//             //.service(ping2)
+//             //.service(generate_wallet)
+//             .service(emit_orchard)
+        
+//     })
+//     .bind("127.0.0.1:8080")?
+//     .run()
+//     .await
+    
+// }
