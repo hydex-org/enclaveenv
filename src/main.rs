@@ -204,8 +204,9 @@
 //     }))
 // }
 
-use actix_web::{web, App, HttpServer};
-use crate::controller::{ZCashController, emit_orchard, zcash_controller};
+use actix_web::{App, HttpServer, http, web};
+use crate::controller::{ZCashController, connect_wallet, emit_orchard, zcash_controller};
+use actix_cors::Cors; 
 //use crate::
 //use crate::client::zcash_rpc_client::BlockchainInfo;
 mod controller;
@@ -223,17 +224,28 @@ async fn main() -> std::io::Result<()> {
 
     let zcash_controller = Arc::new(ZCashController::new().await.unwrap());
 
-    HttpServer::new(
-        move || {
-            App::new()
+    HttpServer::new(move || {
+        // Configure CORS
+        let cors = Cors::default()
+            // In production, replace with specific origins like:
+            // .allowed_origin("http://localhost:3000")
+            // .allowed_origin("http://localhost:8089")
+            .allow_any_origin()
+            .allowed_methods(vec!["GET", "POST", "OPTIONS"])
+            .allowed_headers(vec![
+                http::header::CONTENT_TYPE,
+                http::header::ACCEPT,
+            ])
+            .max_age(3600);
+
+        App::new()
+            .wrap(cors) // 👈 apply CORS middleware
             .app_data(web::Data::new(zcash_controller.clone()))
-            //.service(ping)
-            //.service(ping2)
-            //.service(generate_wallet)
             .service(emit_orchard)
-        
+            .service(connect_wallet)
+            // .service(zcash_controller) // whatever services you expose
     })
-    .bind("127.0.0.1:8080")?
+    .bind("127.0.0.1:8089")?
     .run()
     .await
     

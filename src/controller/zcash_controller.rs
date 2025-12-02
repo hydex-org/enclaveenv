@@ -62,7 +62,7 @@ pub async fn connect_wallet (
     controller: web::Data<Arc<ZCashController>>,
     query: web::Json<solana_wallet_request>,
 ) -> impl Responder {
-    //println!("controller.emit_orchard reached");
+    println!("controller.emit_orchard reached");
     // 1. Clone the Arc (cheap, increases ref count)
     let service_arc = controller.zcash_service.clone();
 
