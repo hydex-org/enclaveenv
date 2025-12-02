@@ -287,4 +287,5 @@ impl ZcashRpcClient {
 // sign wallet to website
 // When wallet is loaded, show it on topright of website. Make UI that
 // Does ZEC -> 
+
 }

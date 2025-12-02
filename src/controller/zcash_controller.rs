@@ -1,6 +1,7 @@
 use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
 use anyhow::{Context, Result};
 use prost::Message;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{client::wallet::CompactTx, service::ZCashRpcClientService};
@@ -47,6 +48,12 @@ pub struct solana_wallet_request {
     solana_wallet: String
 }
 
+#[derive(serde::Deserialize)]
+pub struct binding_request {
+    solana_wallet: String,
+    deposit_address: String,
+}
+
 // async fn convert_guard(
 //     controller_input: web::Data<Arc<ZCashController>>
 // ) -> MutexGuard<'_, ZCashRpcClientService> {
@@ -57,31 +64,32 @@ pub struct solana_wallet_request {
 //     service_guard
 // }
 
+
+
 #[post("/api/v1/connect_wallet")]
-pub async fn connect_wallet (
+pub async fn connect_wallet(
     controller: web::Data<Arc<ZCashController>>,
     query: web::Json<solana_wallet_request>,
 ) -> impl Responder {
-    println!("controller.emit_orchard reached");
-    // 1. Clone the Arc (cheap, increases ref count)
+    println!("connect_wallet reached.");
     let service_arc = controller.zcash_service.clone();
-
-    // 2. Lock the mutex
     let mut service_guard = service_arc.lock().await;
 
-    match service_guard.connect_wallet(query.solana_wallet.clone()).await {
-        Ok(uaddress) => {
-            HttpResponse::Ok().json(serde_json::json!({
-    "message": "Wallet generated",
-    "address": uaddress
-}))
-        }
-        Err(e) => {
-            eprintln!("Error in emit_orchard: {}", e);
-            HttpResponse::InternalServerError().body(format!("Failed to emit orchard: {}", e))
+match service_guard.connect_wallet(query.solana_wallet.clone()).await {
+    Ok(r) => {
+        // If this line errors, r isn't actually serializable in *this* context.
+        let v = serde_json::to_value(&r)
+            .map_err(|e| HttpResponse::InternalServerError().json(serde_json::json!({"error": e.to_string()})));
+        println!("{:?}", v);
+        match v {
+            Ok(v) => HttpResponse::Ok().json(v),
+            Err(resp) => resp,
         }
     }
+    Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e.to_string() })),
 }
+}
+
 
 #[derive(serde::Deserialize)]
 struct EmitOrchardQuery {
@@ -122,9 +130,25 @@ pub async fn emit_orchard(
 #[post("/v1/auth/challenge")]
 pub async fn auth_challenge(
     controller: web::Data<Arc<ZCashController>>,
-    query: web::Json<EmitOrchardQuery>,
+    query: web::Json<binding_request>,
 ) -> impl Responder {
-    HttpResponse::Ok()
+    println!("connect_wallet reached.");
+    let service_arc = controller.zcash_service.clone();
+    let mut service_guard = service_arc.lock().await;
+
+match service_guard.auth_challenge(query.solana_wallet.clone(), query.deposit_address.clone()).await {
+    Ok(r) => {
+        // If this line errors, r isn't actually serializable in *this* context.
+        let v = serde_json::to_value(&r)
+            .map_err(|e| HttpResponse::InternalServerError().json(serde_json::json!({"error": e.to_string()})));
+        println!("{:?}", v);
+        match v {
+            Ok(v) => HttpResponse::Ok().json(v),
+            Err(resp) => resp,
+        }
+    }
+    Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "error": e.to_string() })),
+}
 }
 
 #[post("/v1/auth/verify-wallet")]
