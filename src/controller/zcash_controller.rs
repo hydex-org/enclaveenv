@@ -41,12 +41,25 @@ struct PingQuery {
 //     }
 // }
 // test2
+
+#[derive(serde::Deserialize)]
+pub struct solana_wallet_request {
+    solana_wallet: String
+}
+
+#[post("/api/v1/connect_wallet")]
+pub async fn connect_wallet (
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
+}
+
 #[derive(serde::Deserialize)]
 struct EmitOrchardQuery {
     data: Vec<u8>,
     height: u64,
 }
-
 // inpit #1: blockhash
 // input #2: height
 
@@ -75,5 +88,77 @@ pub async fn emit_orchard(
             HttpResponse::InternalServerError().body(format!("Failed to emit orchard: {}", e))
         }
     }
+
+}
+// connect wallet
+#[post("/v1/auth/challenge")]
+pub async fn auth_challenge(
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
 }
 
+#[post("/v1/auth/verify-wallet")]
+pub async fn verify_wallet(
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
+}
+
+#[post("/v1/deposit-intents")]
+pub async fn deposit_intents (
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
+}
+
+#[post("/v1/burn-intents")]
+pub async fn burn_intents(
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
+}
+
+// #[get("/v1/deposit-intents")]
+// pub async fn deposit_intents(
+//     controller: web::Data<Arc<ZCashController>>,
+//     query: web::Json<EmitOrchardQuery>,
+// ) -> impl Responder {
+//     HttpResponse::Ok()
+// }
+
+// //#[get("/v1/burn-intents")]
+// pub async fn burn_intents(
+//     controller: web::Data<Arc<ZCashController>>,
+//     query: web::Json<EmitOrchardQuery>,
+// ) -> impl Responder {
+//     HttpResponse::Ok()
+// }
+
+#[get("/v1/deposit-intents/{deposit_id}")]
+pub async fn get_deposit_intent (
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
+}
+
+#[post("/v1/internal/attestations")]
+pub async fn internal_attestations (
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
+}
+
+#[get("/v1/burn-intents/{burn_id}")]
+pub async fn get_burn_intent (
+    controller: web::Data<Arc<ZCashController>>,
+    query: web::Json<EmitOrchardQuery>,
+) -> impl Responder {
+    HttpResponse::Ok()
+}

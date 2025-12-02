@@ -4,27 +4,28 @@
 // associate account with business functions
 //
 
-use crate::client::{
-    wallet::{BlockId, CompactBlock, CompactTx},
-    zcash_rpc_client::BlockchainInfo,
-};
+// use crate::client::{
+//     ZcashRpcClient, wallet::{BlockId, CompactBlock, CompactTx}, zcash_rpc_client::BlockchainInfo
+// };
 use actix_web::{App, HttpServer, web};
 use anyhow::{Context, Result, bail};
-use reimagined_pancake_listener::scanner::{OrchardScanner, orchard_scanner};
+
 use std::io::Error;
 //use zcash_primitives::consensus::Network;
 use clap::Parser;
 //use client::zcash_rpc_client::ZcashRpcClient;
 //use crate::client::ZcashRpcClient;
 use crate::client::LightwalletdClient;
-//use crate::scanner::OrchardScanner;
+use crate::client::wallet::BlockId;
+use crate::client::wallet::CompactBlock;
+use crate::scanner::OrchardScanner;
 use std::env;
 use zcash_address::unified::Container;
 use zcash_address::unified::Encoding;
 use zcash_address::{Network, unified};
 pub struct ZCashRpcClientService {
-    //pub rpc_client: ZcashRpcClient,
-    pub rpc_client: LightwalletdClient,
+    //pub broadcast_rpc_client: ZcashRpcClient,
+    pub read_only_rpc_client: LightwalletdClient,
     pub orchard_scanner: OrchardScanner,
 }
 
@@ -36,7 +37,7 @@ struct Cli {
     #[arg(
         short,
         long,
-        default_value = ""
+        default_value = "uviewtest1ggujlrd7jzmevn6vwyxxvm94pupz3z3cze4mgqsn2t8vanuecd5pw6vtqz8n8jmzs9p0ktgp5dxk7nl85w7lt8f4qxmua4t58tc0c2tn6yrzrchmd5zxse48esk7djvrh40txll0wmwrz3h3ysx5xlkjjuq4n8txlftpffz60t5p70lrjk300xe0rr52eq8ej2yrrlgzec66m3jwe3nscu0a8qe2f7066qlh9g439t5x99s0jete4m6r82h06xpksfgynvpzxuhes6pr24w0wzl5te9kel3rc5wk3yajw6y4gnjdl8yjwfgzc2ksnhhlapq3pceaqvkennyw4ynh4xws6qpjdl5yqytqk2a6jwr7d3rfhpw5qnm4ucstx5ltdl8pmhgq3ll2e5fnrndspkqrnnyt8kx4vkufhhmx9fu53uwrpwf445s48y3plhv3dj7zf5xwsyfzv97zn3cty5yqwr9ghecv23k8unn0ttf4fcv6j55wq77w"
     )]
     ufvk: String,
 
@@ -77,7 +78,7 @@ impl ZCashRpcClientService {
         // Decode UFVK
         println!("=== Step 1: Decoding UFVK ===");
 
-        let client = match LightwalletdClient::connect(cli.server.clone()).await {
+        let read_only_rpc_client = match LightwalletdClient::connect(cli.server.clone()).await {
             Ok(c) => {
                 println!("✓");
                 c
@@ -131,7 +132,8 @@ impl ZCashRpcClientService {
 
         // 🚀 RETURN THE SERVICE INSTANCE
         Ok(Self {
-            rpc_client: client,
+            //broadcast_rpc_client: broadcast_rpc_client,
+            read_only_rpc_client: read_only_rpc_client,
             orchard_scanner: orchard_scanner,
         })
     }
@@ -142,7 +144,7 @@ impl ZCashRpcClientService {
             hash: vec![], // optional
         };
 
-        let block = &mut self.rpc_client.get_block(req).await?.into_inner();
+        let block = &mut self.read_only_rpc_client.get_block(req).await?.into_inner();
         // for tx in &block.vtx {
         //     //println!("{}",hex::encode(&tx.hash));
         //     let orchardActions = &tx.actions;
@@ -180,6 +182,15 @@ impl ZCashRpcClientService {
             }
         }
         Ok(block.clone())
+    }
+
+    pub async fn connect_wallet(
+        &mut self,
+        wallet: String
+    ) -> Result<String, Error>{
+        //let response = &mut self.
+        //&mut self.
+        Ok("".to_string())
     }
 }
 // impl zcash_rpc_client_service{
