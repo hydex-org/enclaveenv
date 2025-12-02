@@ -18,6 +18,7 @@ use clap::Parser;
 use crate::client::LightwalletdClient;
 use crate::client::wallet::BlockId;
 use crate::client::wallet::CompactBlock;
+use crate::manager::AddressManager;
 use crate::scanner::OrchardScanner;
 use std::env;
 use zcash_address::unified::Container;
@@ -27,6 +28,7 @@ pub struct ZCashRpcClientService {
     //pub broadcast_rpc_client: ZcashRpcClient,
     pub read_only_rpc_client: LightwalletdClient,
     pub orchard_scanner: OrchardScanner,
+    pub address_manager: AddressManager,
 }
 
 #[derive(Parser)]
@@ -130,11 +132,13 @@ impl ZCashRpcClientService {
         println!("✓ Scanner initialized\n");
         let mut orchard_scanner = OrchardScanner::new(&fvk_bytes)?;
 
+        let mut address_manager = AddressManager::from_ufvk(&cli.ufvk)?;
         // 🚀 RETURN THE SERVICE INSTANCE
         Ok(Self {
             //broadcast_rpc_client: broadcast_rpc_client,
             read_only_rpc_client: read_only_rpc_client,
             orchard_scanner: orchard_scanner,
+            address_manager: address_manager,
         })
     }
 
@@ -189,8 +193,12 @@ impl ZCashRpcClientService {
         wallet: String
     ) -> Result<String, Error>{
         //let response = &mut self.
-        //&mut self.
-        Ok("".to_string())
+            // convert wallet to &str automatically
+            let (deposit_address, idx) =
+        self.address_manager
+            .generate_deposit_address(&wallet)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        Ok(deposit_address)
     }
 }
 // impl zcash_rpc_client_service{

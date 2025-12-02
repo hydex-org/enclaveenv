@@ -4,7 +4,7 @@ use prost::Message;
 use tokio::sync::Mutex;
 
 use crate::{client::wallet::CompactTx, service::ZCashRpcClientService};
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 pub struct ZCashController {
     pub zcash_service: Arc<Mutex<ZCashRpcClientService>>,
 }
@@ -47,12 +47,40 @@ pub struct solana_wallet_request {
     solana_wallet: String
 }
 
+// async fn convert_guard(
+//     controller_input: web::Data<Arc<ZCashController>>
+// ) -> MutexGuard<'_, ZCashRpcClientService> {
+//     let service_arc = controller.zcash_service.clone();
+
+//     // 2. Lock the mutex
+//     let mut service_guard = service_arc.lock().await;
+//     service_guard
+// }
+
 #[post("/api/v1/connect_wallet")]
 pub async fn connect_wallet (
     controller: web::Data<Arc<ZCashController>>,
-    query: web::Json<EmitOrchardQuery>,
+    query: web::Json<solana_wallet_request>,
 ) -> impl Responder {
-    HttpResponse::Ok()
+    //println!("controller.emit_orchard reached");
+    // 1. Clone the Arc (cheap, increases ref count)
+    let service_arc = controller.zcash_service.clone();
+
+    // 2. Lock the mutex
+    let mut service_guard = service_arc.lock().await;
+
+    match service_guard.connect_wallet(query.solana_wallet.clone()).await {
+        Ok(uaddress) => {
+            HttpResponse::Ok().json(serde_json::json!({
+    "message": "Wallet generated",
+    "address": uaddress
+}))
+        }
+        Err(e) => {
+            eprintln!("Error in emit_orchard: {}", e);
+            HttpResponse::InternalServerError().body(format!("Failed to emit orchard: {}", e))
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]

@@ -212,6 +212,7 @@ mod controller;
 mod service;
 mod client;
 mod scanner;
+mod manager;
 
 use std::sync::Arc;
 
