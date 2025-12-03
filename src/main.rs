@@ -29,6 +29,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(zcash_controller.clone()))
+            .service(controller::provision_enclave)
             // Core endpoints
             .service(controller::health_check)
             .service(controller::get_status)

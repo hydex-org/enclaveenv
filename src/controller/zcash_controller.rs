@@ -115,6 +115,18 @@ pub struct DepositIntentResponse {
     pub status: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ProvisionEnclaveRequest {
+    pub ufvk: String,
+    pub bridge_ua: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProvisionEnclaveResponse {
+    pub enclave_pubkey: String,
+    pub status: String,
+}
+
 // ============================================================================
 // ENDPOINTS
 // ============================================================================
@@ -293,6 +305,31 @@ pub async fn get_deposit_intent(
         "status": "pending",
         "note": "Deposit tracking not fully implemented"
     }))
+}
+
+/// Provision the enclave with UFVK from MPC nodes
+#[post("/v1/provision")]
+pub async fn provision_enclave(
+    controller: web::Data<Arc<ZCashController>>,
+    body: web::Json<ProvisionEnclaveRequest>,
+) -> impl Responder {
+    let service = controller.zcash_service.lock().await;
+    
+    let req = crate::manager::ProvisionRequest {
+        ufvk: body.ufvk.clone(),
+        bridge_ua: body.bridge_ua.clone(),
+        admin_signature: "mpc_provision".to_string(),
+    };
+    
+    match service.enclave_provisioner.provision(req) {
+        Ok(resp) => HttpResponse::Ok().json(ProvisionEnclaveResponse {
+            enclave_pubkey: resp.enclave_pubkey,
+            status: resp.status,
+        }),
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
+            "error": e.to_string()
+        })),
+    }
 }
 
 // ============================================================================
