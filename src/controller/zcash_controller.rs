@@ -147,23 +147,43 @@ pub async fn get_status(
 ) -> impl Responder {
     let service = controller.zcash_service.lock().await;
     
-    let response = EnclaveStatusResponse {
-        provisioned: service.enclave_provisioner.is_provisioned(),
-        enclave_pubkey: hex::encode(service.enclave_provisioner.enclave_pubkey_bytes()),
-        pending_attestations: service.get_pending_attestations().len(),
-        last_scanned_height: service.last_scanned_height,
-    };
+    let provisioned = service.enclave_provisioner.is_provisioned();
+    let ready = service.is_ready();
     
-    HttpResponse::Ok().json(response)
+    HttpResponse::Ok().json(serde_json::json!({
+        "provisioned": provisioned,
+        "ready": ready,
+        "enclave_pubkey": hex::encode(service.enclave_provisioner.enclave_pubkey_bytes()),
+        "pending_attestations": service.get_pending_attestations().len(),
+        "last_scanned_height": service.last_scanned_height,
+        "note": if ready {
+            "Enclave is fully operational. Address generation and scanning are enabled."
+        } else if provisioned {
+            "UFVK is sealed but scanner not initialized. This shouldn't happen - please report."
+        } else {
+            "Enclave not yet provisioned. Waiting for MPC nodes to complete DKG and call POST /v1/provision."
+        }
+    }))
 }
 
 /// Generate a deposit address for a Solana user
+/// 
+/// This is the SINGLE AUTHORITY for address generation per Hydex spec.
+/// MPC nodes do NOT generate addresses - only the enclave does.
 #[post("/v1/generate-address")]
 pub async fn generate_address(
     controller: web::Data<Arc<ZCashController>>,
     body: web::Json<GenerateAddressRequest>,
 ) -> impl Responder {
     let service = controller.zcash_service.lock().await;
+    
+    // Check if enclave is ready
+    if !service.is_ready() {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
+            "provisioned": service.enclave_provisioner.is_provisioned()
+        }));
+    }
     
     match service.generate_deposit_address(&body.solana_pubkey) {
         Ok((unified_address, diversifier_index)) => {
@@ -188,6 +208,14 @@ pub async fn scan_blocks(
     body: web::Json<ScanBlocksRequest>,
 ) -> impl Responder {
     let mut service = controller.zcash_service.lock().await;
+    
+    // Check if enclave is ready
+    if !service.is_ready() {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
+            "provisioned": service.enclave_provisioner.is_provisioned()
+        }));
+    }
     
     match service.scan_blocks(body.start_height, body.end_height).await {
         Ok(attestations) => {
@@ -259,12 +287,23 @@ pub async fn mark_attestation_submitted(
 }
 
 /// Create deposit intent (generate address and track)
+/// 
+/// This is the main entry point for users to create a deposit.
+/// Returns a unique Zcash address tied to their Solana wallet.
 #[post("/v1/deposit-intents")]
 pub async fn create_deposit_intent(
     controller: web::Data<Arc<ZCashController>>,
     body: web::Json<DepositIntentRequest>,
 ) -> impl Responder {
     let service = controller.zcash_service.lock().await;
+    
+    // Check if enclave is ready
+    if !service.is_ready() {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
+            "provisioned": service.enclave_provisioner.is_provisioned()
+        }));
+    }
     
     match service.generate_deposit_address(&body.solana_pubkey) {
         Ok((unified_address, diversifier_index)) => {
@@ -308,12 +347,18 @@ pub async fn get_deposit_intent(
 }
 
 /// Provision the enclave with UFVK from MPC nodes
+/// 
+/// This endpoint is called by MPC node 1 after DKG completes.
+/// It provisions the enclave with the UFVK, enabling:
+/// - Address generation (POST /v1/generate-address)
+/// - Block scanning (POST /v1/scan)
+/// - Deposit attestation
 #[post("/v1/provision")]
 pub async fn provision_enclave(
     controller: web::Data<Arc<ZCashController>>,
     body: web::Json<ProvisionEnclaveRequest>,
 ) -> impl Responder {
-    let service = controller.zcash_service.lock().await;
+    let mut service = controller.zcash_service.lock().await;
     
     let req = crate::manager::ProvisionRequest {
         ufvk: body.ufvk.clone(),
@@ -321,11 +366,22 @@ pub async fn provision_enclave(
         admin_signature: "mpc_provision".to_string(),
     };
     
+    // Step 1: Provision the enclave (seals the UFVK)
     match service.enclave_provisioner.provision(req) {
-        Ok(resp) => HttpResponse::Ok().json(ProvisionEnclaveResponse {
-            enclave_pubkey: resp.enclave_pubkey,
-            status: resp.status,
-        }),
+        Ok(resp) => {
+            // Step 2: Initialize scanner and address manager with the UFVK
+            if let Err(e) = service.init_after_provisioning() {
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "error": format!("Provisioning succeeded but initialization failed: {}", e),
+                    "enclave_pubkey": resp.enclave_pubkey
+                }));
+            }
+            
+            HttpResponse::Ok().json(ProvisionEnclaveResponse {
+                enclave_pubkey: resp.enclave_pubkey,
+                status: "provisioned_and_ready".to_string(),
+            })
+        },
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({
             "error": e.to_string()
         })),

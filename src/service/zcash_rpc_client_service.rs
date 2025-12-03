@@ -317,17 +317,51 @@ impl ZCashRpcClientService {
     }
 
     // ========================================================================
+    // PROVISIONING (called after MPC nodes provision the enclave)
+    // ========================================================================
+
+    /// Initialize scanner and address manager after API provisioning
+    /// 
+    /// This is called by the controller after a successful /v1/provision request.
+    /// It sets up the orchard_scanner and address_manager using the provisioned UFVK.
+    pub fn init_after_provisioning(&mut self) -> Result<()> {
+        // Get the UFVK from the provisioner
+        let ufvk_str = self.enclave_provisioner.get_ufvk()?;
+        
+        // Initialize using the shared helper
+        let (scanner, manager) = Self::init_with_ufvk(&ufvk_str, self.network, &self.enclave_provisioner)?;
+        
+        self.orchard_scanner = Some(scanner);
+        self.address_manager = Some(manager);
+        
+        println!("=== Enclave Provisioned via API ===");
+        println!("Scanner and address manager now active");
+        
+        Ok(())
+    }
+
+    /// Check if the enclave is ready for operations
+    pub fn is_ready(&self) -> bool {
+        self.enclave_provisioner.is_provisioned() 
+            && self.orchard_scanner.is_some() 
+            && self.address_manager.is_some()
+    }
+
+    // ========================================================================
     // ADDRESS MANAGEMENT
     // ========================================================================
 
     /// Generate a deposit address for a Solana user
     pub fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<(String, u32)> {
-        self.address_manager.as_ref().unwrap().generate_deposit_address(solana_pubkey)
+        let manager = self.address_manager.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Enclave not provisioned. Call POST /v1/provision first."))?;
+        manager.generate_deposit_address(solana_pubkey)
     }
 
     /// Find Solana pubkey for a Zcash address (reverse lookup)
     fn find_solana_pubkey_for_address(&self, zcash_address: &str) -> Option<(String, u32)> {
-        let mappings = self.address_manager.as_ref().unwrap().get_all_mappings();
+        let manager = self.address_manager.as_ref()?;
+        let mappings = manager.get_all_mappings();
         for (solana_pk, (div_index, ua)) in mappings {
             if ua == zcash_address {
                 return Some((solana_pk, div_index));
