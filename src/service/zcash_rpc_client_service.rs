@@ -85,8 +85,8 @@ struct Cli {
 
 pub struct ZCashRpcClientService {
     pub read_only_rpc_client: LightwalletdClient,
-    pub orchard_scanner: OrchardScanner,
-    pub address_manager: AddressManager,
+    pub orchard_scanner: Option<OrchardScanner>,
+    pub address_manager: Option<AddressManager>,
     pub enclave_state_client: EnclaveStateClient,
     pub enclave_provisioner: EnclaveProvisioner,
     
@@ -117,7 +117,6 @@ impl ZCashRpcClientService {
 
         println!("Network:     {:?}", network);
         println!("Server:      {}", cli.server);
-        println!("Scan depth:  {} blocks\n", cli.blocks);
 
         // Connect to lightwalletd
         println!("=== Connecting to Lightwalletd ===");
@@ -128,65 +127,37 @@ impl ZCashRpcClientService {
             }
             Err(e) => {
                 println!("Failed to connect: {}", e);
-                println!("Try: --server https://lightwalletd.testnet.electriccoin.co:9067");
                 return Err(e);
             }
         };
 
-        // Decode UFVK
-        println!("\n=== Decoding UFVK ===");
-        let decoded = match unified::Ufvk::decode(&cli.ufvk) {
-            Ok((parsed_net, ufvk)) => {
-                if parsed_net != network {
-                    bail!("Network mismatch: UFVK is for {:?} but running on {:?}", parsed_net, network);
-                }
-                println!("UFVK valid for {:?}", parsed_net);
-                ufvk
-            }
-            Err(e) => bail!("Invalid UFVK: {:?}", e),
-        };
-
-        // Extract Orchard FVK
-        let mut orchard_fvk_bytes: Option<[u8; 96]> = None;
-        for item in decoded.items() {
-            if let unified::Fvk::Orchard(bytes) = item {
-                if bytes.len() == 96 {
-                    let mut arr = [0u8; 96];
-                    arr.copy_from_slice(&bytes);
-                    orchard_fvk_bytes = Some(arr);
-                    println!("Orchard FVK extracted (96 bytes)");
-                    break;
-                }
-            }
-        }
-
-        let fvk_bytes = orchard_fvk_bytes
-            .ok_or_else(|| anyhow::anyhow!("No Orchard FVK in UFVK"))?;
-
-        // Initialize components
-        let orchard_scanner = OrchardScanner::new(&fvk_bytes)?;
-        println!("Scanner initialized");
-
-        let address_manager = AddressManager::from_ufvk(&cli.ufvk)?;
-        println!("Address manager initialized");
-
-        let enclave_state_client = EnclaveStateClient::new().await?;
-
+        // Create enclave provisioner (always created - handles Ed25519 keypair)
         let enclave_provisioner = EnclaveProvisioner::new();
         println!("Enclave pubkey: {}", hex::encode(enclave_provisioner.enclave_pubkey_bytes()));
 
-        // Auto-provision with the UFVK
-        let provision_req = ProvisionRequest {
-            ufvk: cli.ufvk.clone(),
-            bridge_ua: cli.address.unwrap_or_default(),
-            admin_signature: "auto".to_string(),
+        // Check if UFVK was provided at startup
+        let (orchard_scanner, address_manager) = if !cli.ufvk.is_empty() {
+            println!("\n=== Decoding UFVK ===");
+            match Self::init_with_ufvk(&cli.ufvk, network, &enclave_provisioner) {
+                Ok((scanner, manager)) => {
+                    println!("Scanner and address manager initialized");
+                    (Some(scanner), Some(manager))
+                }
+                Err(e) => {
+                    println!("Failed to initialize with UFVK: {}", e);
+                    (None, None)
+                }
+            }
+        } else {
+            println!("\n=== No UFVK provided ===");
+            println!("Enclave starting in UNPROVISIONED mode.");
+            println!("Call POST /v1/provision with UFVK from MPC nodes to enable scanning.");
+            (None, None)
         };
-        match enclave_provisioner.provision(provision_req) {
-            Ok(_) => println!("Enclave auto-provisioned with UFVK"),
-            Err(e) => println!("Provision note: {}", e),
-        }
 
-        println!("\nEnclave ready!\n");
+        let enclave_state_client = EnclaveStateClient::new().await?;
+
+        println!("\nEnclave ready! (provisioned: {})\n", orchard_scanner.is_some());
 
         Ok(Self {
             read_only_rpc_client,
@@ -198,6 +169,50 @@ impl ZCashRpcClientService {
             last_scanned_height: 0,
             network,
         })
+    }
+
+    /// Initialize scanner and address manager from UFVK
+    fn init_with_ufvk(
+        ufvk_str: &str,
+        network: Network,
+        provisioner: &EnclaveProvisioner,
+    ) -> Result<(OrchardScanner, AddressManager)> {
+        let decoded = unified::Ufvk::decode(ufvk_str)
+            .map_err(|e| anyhow::anyhow!("Invalid UFVK: {:?}", e))?;
+
+        let (parsed_net, ufvk) = decoded;
+        if parsed_net != network {
+            anyhow::bail!("Network mismatch: UFVK is for {:?} but running on {:?}", parsed_net, network);
+        }
+
+        // Extract Orchard FVK
+        let mut orchard_fvk_bytes: Option<[u8; 96]> = None;
+        for item in ufvk.items() {
+            if let unified::Fvk::Orchard(bytes) = item {
+                if bytes.len() == 96 {
+                    let mut arr = [0u8; 96];
+                    arr.copy_from_slice(&bytes);
+                    orchard_fvk_bytes = Some(arr);
+                    break;
+                }
+            }
+        }
+
+        let fvk_bytes = orchard_fvk_bytes
+            .ok_or_else(|| anyhow::anyhow!("No Orchard FVK in UFVK"))?;
+
+        let scanner = OrchardScanner::new(&fvk_bytes)?;
+        let manager = AddressManager::from_ufvk(ufvk_str)?;
+
+        // Auto-provision
+        let provision_req = ProvisionRequest {
+            ufvk: ufvk_str.to_string(),
+            bridge_ua: String::new(),
+            admin_signature: "auto".to_string(),
+        };
+        let _ = provisioner.provision(provision_req);
+
+        Ok((scanner, manager))
     }
 
     // ========================================================================
@@ -217,8 +232,8 @@ impl ZCashRpcClientService {
 
         for tx in &block.vtx {
             for action in &tx.actions {
-                // Try to decrypt
-                if let Some(note) = self.orchard_scanner.try_decrypt_action(
+                // Try to decrypt - need as_mut() because try_decrypt_action takes &mut self
+                if let Some(note) = self.orchard_scanner.as_mut().unwrap().try_decrypt_action(
                     &action.nullifier,
                     &action.cmx,
                     &action.ephemeral_key,
@@ -227,10 +242,8 @@ impl ZCashRpcClientService {
                 ) {
                     println!("  Found deposit: {} zatoshi at block {}", note.value, height);
 
-                    // Look up Solana pubkey from address
-                    // For now, we need to reverse-lookup from the address
-                    // In production, you'd have a mapping from UA -> solana_pubkey
-                    if let Some((solana_pubkey_str, div_index)) = 
+                    // Look up Solana pubkey from address - call self method, not AddressManager
+                    if let Some((solana_pubkey_str, _div_index)) = 
                         self.find_solana_pubkey_for_address(&note.recipient_address) 
                     {
                         // Convert solana pubkey string to bytes
@@ -309,12 +322,12 @@ impl ZCashRpcClientService {
 
     /// Generate a deposit address for a Solana user
     pub fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<(String, u32)> {
-        self.address_manager.generate_deposit_address(solana_pubkey)
+        self.address_manager.as_ref().unwrap().generate_deposit_address(solana_pubkey)
     }
 
     /// Find Solana pubkey for a Zcash address (reverse lookup)
     fn find_solana_pubkey_for_address(&self, zcash_address: &str) -> Option<(String, u32)> {
-        let mappings = self.address_manager.get_all_mappings();
+        let mappings = self.address_manager.as_ref().unwrap().get_all_mappings();
         for (solana_pk, (div_index, ua)) in mappings {
             if ua == zcash_address {
                 return Some((solana_pk, div_index));
@@ -360,7 +373,8 @@ impl ZCashRpcClientService {
 
         for tx in &block.vtx {
             for action in &tx.actions {
-                if let Some(note) = self.orchard_scanner.try_decrypt_action(
+                // Fix: as_mut() instead of as_ref()
+                if let Some(note) = self.orchard_scanner.as_mut().unwrap().try_decrypt_action(
                     &action.nullifier,
                     &action.cmx,
                     &action.ephemeral_key,
