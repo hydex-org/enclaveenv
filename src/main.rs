@@ -153,7 +153,7 @@ async fn main() -> std::io::Result<()> {
             // Core endpoints
             .service(controller::health_check)
             .service(controller::get_status)
-            .service(controller::generate_address)
+            //.service(controller::generate_address)
             .service(controller::scan_blocks)
             .service(controller::get_pending_attestations)
             .service(controller::mark_attestation_submitted)

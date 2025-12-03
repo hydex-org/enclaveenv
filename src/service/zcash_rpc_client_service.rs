@@ -352,10 +352,19 @@ impl ZCashRpcClientService {
     // ========================================================================
 
     /// Generate a deposit address for a Solana user
-    pub fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<(String, u32)> {
-        let manager = self.address_manager.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Enclave not provisioned. Call POST /v1/provision first."))?;
-        manager.generate_deposit_address(solana_pubkey)
+    pub async fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<DepositAddressResponse> {
+       let req = DepositAddressRequest {
+            solana_pubkey: solana_pubkey.to_string(),
+        };
+        let client = reqwest::Client::new();
+        let resp = client
+            .post("http://localhost:3001/api/deposit-address")
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&req)
+            .send()
+            .await?;
+        let parsed: DepositAddressResponse = resp.json().await?;
+        Ok(parsed)
     }
 
     /// Find Solana pubkey for a Zcash address (reverse lookup)

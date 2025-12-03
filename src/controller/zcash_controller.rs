@@ -169,37 +169,21 @@ pub async fn get_status(
 /// Generate a deposit address for a Solana user
 /// 
 /// This is the SINGLE AUTHORITY for address generation per Hydex spec.
-/// MPC nodes do NOT generate addresses - only the enclave does.
-#[post("/v1/generate-address")]
-pub async fn generate_address(
-    controller: web::Data<Arc<ZCashController>>,
-    body: web::Json<GenerateAddressRequest>,
-) -> impl Responder {
-    let service = controller.zcash_service.lock().await;
-    
-    // Check if enclave is ready
-    if !service.is_ready() {
-        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
-            "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
-            "provisioned": service.enclave_provisioner.is_provisioned()
-        }));
-    }
-    
-    match service.generate_deposit_address(&body.solana_pubkey) {
-        Ok((unified_address, diversifier_index)) => {
-            HttpResponse::Ok().json(GenerateAddressResponse {
-                unified_address,
-                diversifier_index,
-                solana_pubkey: body.solana_pubkey.clone(),
-            })
-        }
-        Err(e) => {
-            HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": e.to_string()
-            }))
-        }
-    }
-}
+// /// MPC nodes do NOT generate addresses - only the enclave does.
+// #[post("/v1/generate-address")]
+// pub async fn generate_address(
+//     controller: web::Data<Arc<ZCashController>>,
+//     query: web::Json<SolanaWalletRequest>,
+// ) -> impl Responder {
+//     let mut service = controller.zcash_service.lock().await;
+
+//     match service.connect_wallet(query.solana_wallet.clone()).await {
+//         Ok(r) => HttpResponse::Ok().json(r),
+//         Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+//             "error": e.to_string()
+//         })),
+//     }
+// }
 
 /// Scan blocks for deposits
 #[post("/v1/scan")]
@@ -298,28 +282,30 @@ pub async fn create_deposit_intent(
     let service = controller.zcash_service.lock().await;
     
     // Check if enclave is ready
-    if !service.is_ready() {
-        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
-            "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
-            "provisioned": service.enclave_provisioner.is_provisioned()
-        }));
-    }
+    // if !service.is_ready() {
+    //     return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+    //         "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
+    //         "provisioned": service.enclave_provisioner.is_provisioned()
+    //     }));
+    // }
     
-    match service.generate_deposit_address(&body.solana_pubkey) {
-        Ok((unified_address, diversifier_index)) => {
-            HttpResponse::Ok().json(DepositIntentResponse {
-                deposit_id: format!("dep_{}", diversifier_index),
-                unified_address,
-                diversifier_index,
-                status: "pending".to_string(),
-            })
-        }
-        Err(e) => {
-            HttpResponse::InternalServerError().json(serde_json::json!({
-                "error": e.to_string()
-            }))
-        }
-    }
+    // match service.generate_deposit_address(&body.solana_pubkey) {
+    //     Ok((unified_address, diversifier_index)) => {
+    //         HttpResponse::Ok().json(DepositIntentResponse {
+    //             deposit_id: format!("dep_{}", diversifier_index),
+    //             unified_address,
+    //             diversifier_index,
+    //             status: "pending".to_string(),
+    //         })
+    //     }
+    //     Err(e) => {
+    //         HttpResponse::InternalServerError().json(serde_json::json!({
+    //             "error": e.to_string()
+    //         }))
+    //     }
+    // }
+    HttpResponse::Ok()
+    
 }
 
 /// Get deposit intent by ID
@@ -418,7 +404,7 @@ pub async fn emit_orchard(
     }
 }
 
-#[post("/api/v1/connect_wallet")]
+#[post("/api/v1/generate-address")]
 pub async fn connect_wallet(
     controller: web::Data<Arc<ZCashController>>,
     query: web::Json<SolanaWalletRequest>,
