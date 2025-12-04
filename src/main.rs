@@ -168,7 +168,7 @@ async fn main() -> std::io::Result<()> {
             .service(controller::get_burn_intent)
             .service(controller::internal_attestations)
     })
-    .bind("127.0.0.1:8089")?
+    .bind("0.0.0.0:8089")?
     .run()
     .await
 }
