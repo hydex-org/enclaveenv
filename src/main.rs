@@ -23,8 +23,8 @@ struct ScannerConfig {
 impl Default for ScannerConfig {
     fn default() -> Self {
         Self {
-            poll_interval_secs: 30,  // Check every 30 seconds
-            min_confirmations: 10,   // Wait for 10 confirmations
+            poll_interval_secs: 3,   // Check every 3 seconds (faster for testing)
+            min_confirmations: 2,    // Only 2 confirmations (faster for testing)
         }
     }
 }

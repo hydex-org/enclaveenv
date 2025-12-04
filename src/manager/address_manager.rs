@@ -11,6 +11,20 @@ use orchard::keys::{FullViewingKey, Scope};
 use zcash_address::unified::{self, Address, Encoding, Receiver, Container};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::path::Path;
+use std::fs;
+use serde::{Serialize, Deserialize};
+
+/// Default path for persisted mappings
+const MAPPINGS_FILE: &str = "data/address_mappings.json";
+
+/// Serializable mapping entry
+#[derive(Serialize, Deserialize, Clone)]
+struct MappingEntry {
+    solana_pubkey: String,
+    diversifier_index: u32,
+    zcash_address: String,
+}
 
 /// Manages deposit address generation using native Orchard diversification
 pub struct AddressManager {
@@ -107,6 +121,11 @@ pub fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<(String, u
         mappings.insert(solana_pubkey.to_string(), (div_index, ua_string.clone()));
     }
     
+    // Persist to disk
+    if let Err(e) = self.save_mappings() {
+        tracing::warn!("Failed to persist mappings: {}", e);
+    }
+    
     Ok((ua_string, div_index))
 }
     
@@ -135,6 +154,70 @@ pub fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<(String, u
         }
         
         Ok(())
+    }
+
+    /// Save mappings to disk
+    pub fn save_mappings(&self) -> Result<()> {
+        let mappings = self.user_mappings.lock().unwrap();
+        
+        let entries: Vec<MappingEntry> = mappings.iter()
+            .map(|(solana_pk, (idx, addr))| MappingEntry {
+                solana_pubkey: solana_pk.clone(),
+                diversifier_index: *idx,
+                zcash_address: addr.clone(),
+            })
+            .collect();
+        
+        // Ensure data directory exists
+        if let Some(parent) = Path::new(MAPPINGS_FILE).parent() {
+            fs::create_dir_all(parent)?;
+        }
+        
+        let json = serde_json::to_string_pretty(&entries)?;
+        fs::write(MAPPINGS_FILE, json)?;
+        
+        tracing::info!("Saved {} address mappings to {}", entries.len(), MAPPINGS_FILE);
+        Ok(())
+    }
+
+    /// Load mappings from disk
+    pub fn load_mappings(&self) -> Result<usize> {
+        if !Path::new(MAPPINGS_FILE).exists() {
+            tracing::info!("No existing mappings file found at {}", MAPPINGS_FILE);
+            return Ok(0);
+        }
+        
+        let json = fs::read_to_string(MAPPINGS_FILE)?;
+        let entries: Vec<MappingEntry> = serde_json::from_str(&json)?;
+        
+        let mut mappings = HashMap::new();
+        let mut max_index = 0u32;
+        
+        for entry in &entries {
+            mappings.insert(
+                entry.solana_pubkey.clone(),
+                (entry.diversifier_index, entry.zcash_address.clone())
+            );
+            if entry.diversifier_index > max_index {
+                max_index = entry.diversifier_index;
+            }
+        }
+        
+        // Restore to memory
+        {
+            let mut user_mappings = self.user_mappings.lock().unwrap();
+            *user_mappings = mappings;
+        }
+        
+        // Update next_index
+        {
+            let mut next = self.next_index.lock().unwrap();
+            *next = max_index + 1;
+        }
+        
+        let count = entries.len();
+        tracing::info!("Loaded {} address mappings from {}", count, MAPPINGS_FILE);
+        Ok(count)
     }
 }
 

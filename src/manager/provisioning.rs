@@ -7,7 +7,6 @@
 //! - Deposit attestation signing
 
 use anyhow::Result;
-use blake2::{Blake2b512, Digest};
 use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Signature, Verifier};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -261,7 +260,8 @@ impl EnclaveProvisioner {
     /// Sign a deposit attestation
     /// 
     /// This proves the enclave detected a valid Zcash deposit.
-    /// The signature covers: BLAKE2b-512(note_commitment || amount || recipient || block_height)
+    /// The signature covers the raw message: note_commitment || amount || recipient || block_height
+    /// (Ed25519 internally hashes with SHA-512, compatible with Solana's Ed25519 program)
     pub fn sign_attestation(
         &self,
         note_commitment: [u8; 32],
@@ -274,16 +274,16 @@ impl EnclaveProvisioner {
             anyhow::bail!("Cannot sign attestation: enclave not provisioned");
         }
 
-        // Build message to sign: BLAKE2b-512(note_commitment || amount || recipient || block_height)
-        let mut hasher = Blake2b512::new();
-        hasher.update(&note_commitment);
-        hasher.update(&amount.to_le_bytes());
-        hasher.update(&recipient_solana);
-        hasher.update(&block_height.to_le_bytes());
-        let message_hash = hasher.finalize();
+        // Build raw message to sign: note_commitment || amount || recipient || block_height
+        // The Ed25519 algorithm will internally hash this message
+        let mut message = Vec::with_capacity(32 + 8 + 32 + 8);
+        message.extend_from_slice(&note_commitment);
+        message.extend_from_slice(&amount.to_le_bytes());
+        message.extend_from_slice(&recipient_solana);
+        message.extend_from_slice(&block_height.to_le_bytes());
 
-        // Sign with enclave keypair
-        let signature: Signature = self.enclave_keypair.sign(&message_hash);
+        // Sign with enclave keypair (Ed25519 uses SHA-512 internally)
+        let signature: Signature = self.enclave_keypair.sign(&message);
 
         tracing::info!(
             "Signed attestation: amount={} zatoshi, block={}, recipient={}...",
@@ -304,20 +304,19 @@ impl EnclaveProvisioner {
 
     /// Verify an attestation signature
     pub fn verify_attestation(attestation: &DepositAttestation) -> Result<bool> {
-        // Rebuild message hash
-        let mut hasher = Blake2b512::new();
-        hasher.update(&attestation.note_commitment);
-        hasher.update(&attestation.amount.to_le_bytes());
-        hasher.update(&attestation.recipient_solana);
-        hasher.update(&attestation.block_height.to_le_bytes());
-        let message_hash = hasher.finalize();
+        // Rebuild raw message
+        let mut message = Vec::with_capacity(32 + 8 + 32 + 8);
+        message.extend_from_slice(&attestation.note_commitment);
+        message.extend_from_slice(&attestation.amount.to_le_bytes());
+        message.extend_from_slice(&attestation.recipient_solana);
+        message.extend_from_slice(&attestation.block_height.to_le_bytes());
 
         // Verify signature
         let pubkey = VerifyingKey::from_bytes(&attestation.enclave_pubkey)
             .map_err(|e| anyhow::anyhow!("Invalid pubkey: {}", e))?;
         let signature = Signature::from_bytes(&attestation.enclave_signature);
 
-        Ok(pubkey.verify(&message_hash, &signature).is_ok())
+        Ok(pubkey.verify(&message, &signature).is_ok())
     }
 }
 

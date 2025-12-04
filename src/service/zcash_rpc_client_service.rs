@@ -204,6 +204,18 @@ impl ZCashRpcClientService {
         let scanner = OrchardScanner::new(&fvk_bytes)?;
         let manager = AddressManager::from_ufvk(ufvk_str)?;
 
+        // Load persisted mappings from disk
+        match manager.load_mappings() {
+            Ok(count) => {
+                if count > 0 {
+                    println!("Restored {} address mappings from disk", count);
+                }
+            }
+            Err(e) => {
+                println!("Warning: Could not load persisted mappings: {}", e);
+            }
+        }
+
         // Auto-provision
         let provision_req = ProvisionRequest {
             ufvk: ufvk_str.to_string(),
@@ -432,20 +444,34 @@ impl ZCashRpcClientService {
     }
 
     pub async fn connect_wallet(&mut self, wallet: String) -> Result<DepositAddressResponse> {
-        let client = reqwest::Client::new();
-        let req = DepositAddressRequest {
-            solana_pubkey: wallet,
-        };
-        let resp = client
-            .post("http://localhost:3001/api/deposit-address")
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&req)
-            .send()
-            .await?;
-        let parsed: DepositAddressResponse = resp.json().await?;
-        Ok(parsed)
-    }
+        // Check if address manager is initialized
+        if self.address_manager.is_none() {
+            anyhow::bail!("Enclave not provisioned. MPC nodes must call /v1/provision first.");
+        }
 
+        let address_manager = self.address_manager.as_ref().unwrap();
+        
+        // Generate address locally using the enclave's UFVK
+        let (unified_address, diversifier_index) = address_manager
+            .generate_deposit_address(&wallet)
+            .map_err(|e| anyhow::anyhow!("Failed to generate address: {}", e))?;
+
+        // Save mappings after generating address
+        if let Some(ref am) = self.address_manager {
+            if let Err(e) = am.save_mappings() {
+                eprintln!("Warning: Failed to save address mappings: {}", e);
+            }
+        }
+
+        Ok(DepositAddressResponse {
+            deposit_address: unified_address.clone(),
+            diversifier_index,
+            solana_pubkey: wallet,
+            network: "testnet".to_string(),
+            ufvk: unified_address,
+            note: "Send ZEC to this address to receive sZEC on Solana".to_string(),
+        })
+    }
     pub async fn auth_challenge(
         &mut self,
         wallet: String,
