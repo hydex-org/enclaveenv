@@ -102,12 +102,17 @@ async fn run_background_scanner(controller: Arc<ZCashController>, config: Scanne
         };
         
         match scan_result {
-            Ok(attestations) => {
-                if !attestations.is_empty() {
-                    println!("[Scanner] Found {} deposits!", attestations.len());
-                    for att in &attestations {
-                        println!("   - {} zatoshi at block {}", att.amount, att.block_height);
-                    }
+            Ok(processed_deposits) => {
+                if !processed_deposits.is_empty() {
+                    let minted = processed_deposits.iter()
+                        .filter(|p| p.mint_result.as_ref().map(|r| r.success).unwrap_or(false))
+                        .count();
+                    let failed = processed_deposits.iter()
+                        .filter(|p| p.error.is_some())
+                        .count();
+                    
+                    println!("[Scanner] Processed {} deposits: {} minted, {} failed", 
+                        processed_deposits.len(), minted, failed);
                 }
             }
             Err(e) => {

@@ -2,8 +2,7 @@
 //! 
 //! REST API endpoints for:
 //! - Generating deposit addresses
-//! - Scanning for deposits
-//! - Getting pending attestations
+//! - Scanning for deposits (with direct minting)
 //! - Enclave status
 
 use actix_web::{get, post, web, HttpResponse, Responder};
@@ -13,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 
-use crate::manager::DepositAttestation;
 use crate::service::ZCashRpcClientService;
 
 // ============================================================================
@@ -46,73 +44,15 @@ pub struct SolanaWalletRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct GenerateAddressRequest {
-    pub solana_pubkey: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GenerateAddressResponse {
-    pub unified_address: String,
-    pub diversifier_index: u32,
-    pub solana_pubkey: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ScanBlocksRequest {
     pub start_height: u64,
     pub end_height: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ScanResultResponse {
-    pub blocks_scanned: u64,
-    pub deposits_found: usize,
-    pub attestations: Vec<AttestationResponse>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AttestationResponse {
-    pub note_commitment: String,
-    pub amount: u64,
-    pub recipient_solana: String,
-    pub block_height: u64,
-    pub enclave_signature: String,
-    pub enclave_pubkey: String,
-}
-
-impl From<&DepositAttestation> for AttestationResponse {
-    fn from(a: &DepositAttestation) -> Self {
-        Self {
-            note_commitment: hex::encode(a.note_commitment),
-            amount: a.amount,
-            recipient_solana: hex::encode(a.recipient_solana),
-            block_height: a.block_height,
-            enclave_signature: hex::encode(a.enclave_signature),
-            enclave_pubkey: hex::encode(a.enclave_pubkey),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct EnclaveStatusResponse {
-    pub provisioned: bool,
-    pub enclave_pubkey: String,
-    pub pending_attestations: usize,
-    pub last_scanned_height: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DepositIntentRequest {
     pub solana_pubkey: String,
     pub diversifier_index: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DepositIntentResponse {
-    pub deposit_id: String,
-    pub unified_address: String,
-    pub diversifier_index: u32,
-    pub status: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -149,43 +89,27 @@ pub async fn get_status(
     
     let provisioned = service.enclave_provisioner.is_provisioned();
     let ready = service.is_ready();
+    let can_mint = service.can_mint();
     
     HttpResponse::Ok().json(serde_json::json!({
         "provisioned": provisioned,
         "ready": ready,
+        "can_mint": can_mint,
         "enclave_pubkey": hex::encode(service.enclave_provisioner.enclave_pubkey_bytes()),
-        "pending_attestations": service.get_pending_attestations().len(),
         "last_scanned_height": service.last_scanned_height,
-        "note": if ready {
-            "Enclave is fully operational. Address generation and scanning are enabled."
+        "note": if can_mint {
+            "Enclave is fully operational with direct Solana minting enabled."
+        } else if ready {
+            "Enclave ready for scanning but Solana minting not configured. Set --program-id to enable."
         } else if provisioned {
-            "UFVK is sealed but scanner not initialized. This shouldn't happen - please report."
+            "UFVK is sealed but scanner not initialized."
         } else {
-            "Enclave not yet provisioned. Waiting for MPC nodes to complete DKG and call POST /v1/provision."
+            "Enclave not yet provisioned. Waiting for MPC nodes to call POST /v1/provision."
         }
     }))
 }
 
-/// Generate a deposit address for a Solana user
-/// 
-/// This is the SINGLE AUTHORITY for address generation per Hydex spec.
-// /// MPC nodes do NOT generate addresses - only the enclave does.
-// #[post("/v1/generate-address")]
-// pub async fn generate_address(
-//     controller: web::Data<Arc<ZCashController>>,
-//     query: web::Json<SolanaWalletRequest>,
-// ) -> impl Responder {
-//     let mut service = controller.zcash_service.lock().await;
-
-//     match service.connect_wallet(query.solana_wallet.clone()).await {
-//         Ok(r) => HttpResponse::Ok().json(r),
-//         Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
-//             "error": e.to_string()
-//         })),
-//     }
-// }
-
-/// Scan blocks for deposits
+/// Scan blocks for deposits and mint directly
 #[post("/v1/scan")]
 pub async fn scan_blocks(
     controller: web::Data<Arc<ZCashController>>,
@@ -193,7 +117,6 @@ pub async fn scan_blocks(
 ) -> impl Responder {
     let mut service = controller.zcash_service.lock().await;
     
-    // Check if enclave is ready
     if !service.is_ready() {
         return HttpResponse::ServiceUnavailable().json(serde_json::json!({
             "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
@@ -202,13 +125,32 @@ pub async fn scan_blocks(
     }
     
     match service.scan_blocks(body.start_height, body.end_height).await {
-        Ok(attestations) => {
-            let response = ScanResultResponse {
-                blocks_scanned: body.end_height - body.start_height + 1,
-                deposits_found: attestations.len(),
-                attestations: attestations.iter().map(AttestationResponse::from).collect(),
-            };
-            HttpResponse::Ok().json(response)
+        Ok(processed) => {
+            let minted = processed.iter()
+                .filter(|p| p.mint_result.as_ref().map(|r| r.success).unwrap_or(false))
+                .count();
+            let failed = processed.iter()
+                .filter(|p| p.error.is_some())
+                .count();
+            
+            HttpResponse::Ok().json(serde_json::json!({
+                "blocks_scanned": body.end_height - body.start_height + 1,
+                "deposits_found": processed.len(),
+                "minted": minted,
+                "failed": failed,
+                "deposits": processed.iter().map(|p| {
+                    serde_json::json!({
+                        "note_commitment": hex::encode(p.attestation.note_commitment),
+                        "amount": p.attestation.amount,
+                        "recipient_solana": hex::encode(p.attestation.recipient_solana),
+                        "block_height": p.attestation.block_height,
+                        "enclave_signature": hex::encode(p.attestation.enclave_signature),
+                        "minted": p.mint_result.as_ref().map(|r| r.success).unwrap_or(false),
+                        "tx_signature": p.mint_result.as_ref().map(|r| r.signature.clone()),
+                        "error": p.error.clone()
+                    })
+                }).collect::<Vec<_>>()
+            }))
         }
         Err(e) => {
             HttpResponse::InternalServerError().json(serde_json::json!({
@@ -218,127 +160,81 @@ pub async fn scan_blocks(
     }
 }
 
-/// Get pending attestations (ready for Solana submission)
+/// Get pending attestations - DEPRECATED
+/// With direct minting, attestations are submitted immediately during scanning.
 #[get("/v1/attestations/pending")]
 pub async fn get_pending_attestations(
-    controller: web::Data<Arc<ZCashController>>,
+    _controller: web::Data<Arc<ZCashController>>,
 ) -> impl Responder {
-    let service = controller.zcash_service.lock().await;
-    let attestations = service.get_pending_attestations();
-    
-    let response: Vec<AttestationResponse> = attestations
-        .iter()
-        .map(AttestationResponse::from)
-        .collect();
-    
-    HttpResponse::Ok().json(response)
+    HttpResponse::Ok().json(serde_json::json!({
+        "attestations": [],
+        "note": "DEPRECATED: Attestations are now submitted directly during scanning."
+    }))
 }
 
-/// Mark attestation as submitted (remove from queue)
+/// Mark attestation as submitted - DEPRECATED
+/// With direct minting, this is no longer needed.
 #[post("/v1/attestations/mark-submitted")]
 pub async fn mark_attestation_submitted(
-    controller: web::Data<Arc<ZCashController>>,
-    body: web::Json<serde_json::Value>,
+    _controller: web::Data<Arc<ZCashController>>,
+    _body: web::Json<serde_json::Value>,
 ) -> impl Responder {
-    let note_commitment_hex = match body.get("note_commitment").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "error": "note_commitment required"
-            }));
-        }
-    };
-    
-    let note_commitment_bytes = match hex::decode(note_commitment_hex) {
-        Ok(bytes) if bytes.len() == 32 => {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            arr
-        }
-        _ => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "error": "invalid note_commitment format"
-            }));
-        }
-    };
-    
-    let service = controller.zcash_service.lock().await;
-    service.mark_attestation_submitted(&note_commitment_bytes);
-    
     HttpResponse::Ok().json(serde_json::json!({
-        "status": "removed"
+        "status": "deprecated",
+        "note": "Attestations are now submitted directly during scanning."
     }))
 }
 
 /// Create deposit intent (generate address and track)
-/// 
-/// This is the main entry point for users to create a deposit.
-/// Returns a unique Zcash address tied to their Solana wallet.
 #[post("/v1/deposit-intents")]
 pub async fn create_deposit_intent(
     controller: web::Data<Arc<ZCashController>>,
     body: web::Json<DepositIntentRequest>,
 ) -> impl Responder {
-    let service = controller.zcash_service.lock().await;
+    let mut service = controller.zcash_service.lock().await;
     
-    // Check if enclave is ready
-    // if !service.is_ready() {
-    //     return HttpResponse::ServiceUnavailable().json(serde_json::json!({
-    //         "error": "Enclave not provisioned. MPC nodes must complete DKG and call POST /v1/provision first.",
-    //         "provisioned": service.enclave_provisioner.is_provisioned()
-    //     }));
-    // }
+    if !service.is_ready() {
+        return HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "error": "Enclave not provisioned"
+        }));
+    }
     
-    // match service.generate_deposit_address(&body.solana_pubkey) {
-    //     Ok((unified_address, diversifier_index)) => {
-    //         HttpResponse::Ok().json(DepositIntentResponse {
-    //             deposit_id: format!("dep_{}", diversifier_index),
-    //             unified_address,
-    //             diversifier_index,
-    //             status: "pending".to_string(),
-    //         })
-    //     }
-    //     Err(e) => {
-    //         HttpResponse::InternalServerError().json(serde_json::json!({
-    //             "error": e.to_string()
-    //         }))
-    //     }
-    // }
-    HttpResponse::Ok()
-    
+    match service.connect_wallet(body.solana_pubkey.clone()).await {
+        Ok(resp) => HttpResponse::Ok().json(serde_json::json!({
+            "deposit_id": format!("dep_{}", resp.diversifier_index),
+            "unified_address": resp.deposit_address,
+            "diversifier_index": resp.diversifier_index,
+            "solana_pubkey": resp.solana_pubkey,
+            "status": "pending"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": e.to_string()
+        }))
+    }
 }
 
 /// Get deposit intent by ID
 #[get("/v1/deposit-intents/{deposit_id}")]
 pub async fn get_deposit_intent(
-    controller: web::Data<Arc<ZCashController>>,
+    _controller: web::Data<Arc<ZCashController>>,
     path: web::Path<String>,
 ) -> impl Responder {
     let deposit_id = path.into_inner();
     
-    // Parse diversifier index from deposit_id (format: dep_N)
     let div_index: u32 = deposit_id
         .strip_prefix("dep_")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     
-    // For now, return a placeholder
-    // In production, you'd look up the actual deposit status
     HttpResponse::Ok().json(serde_json::json!({
         "deposit_id": deposit_id,
         "diversifier_index": div_index,
         "status": "pending",
-        "note": "Deposit tracking not fully implemented"
+        "note": "Full deposit tracking not yet implemented"
     }))
 }
 
 /// Provision the enclave with UFVK from MPC nodes
-/// 
-/// This endpoint is called by MPC node 1 after DKG completes.
-/// It provisions the enclave with the UFVK, enabling:
-/// - Address generation (POST /v1/generate-address)
-/// - Block scanning (POST /v1/scan)
-/// - Deposit attestation
 #[post("/v1/provision")]
 pub async fn provision_enclave(
     controller: web::Data<Arc<ZCashController>>,
@@ -352,10 +248,8 @@ pub async fn provision_enclave(
         admin_signature: "mpc_provision".to_string(),
     };
     
-    // Step 1: Provision the enclave (seals the UFVK)
-    match service.enclave_provisioner.provision(req) {
+    match service.enclave_provisioner.provision(req).await {
         Ok(resp) => {
-            // Step 2: Initialize scanner and address manager with the UFVK
             if let Err(e) = service.init_after_provisioning() {
                 return HttpResponse::InternalServerError().json(serde_json::json!({
                     "error": format!("Provisioning succeeded but initialization failed: {}", e),
@@ -427,17 +321,12 @@ pub struct BindingRequest {
 
 #[post("/v1/auth/challenge")]
 pub async fn auth_challenge(
-    controller: web::Data<Arc<ZCashController>>,
-    query: web::Json<BindingRequest>,
+    _controller: web::Data<Arc<ZCashController>>,
+    _query: web::Json<BindingRequest>,
 ) -> impl Responder {
-    let mut service = controller.zcash_service.lock().await;
-
-    match service.auth_challenge(query.solana_wallet.clone(), query.deposit_address.clone()).await {
-        Ok(r) => HttpResponse::Ok().json(r),
-        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": e.to_string()
-        })),
-    }
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "not_implemented"
+    }))
 }
 
 #[post("/v1/auth/verify-wallet")]
@@ -454,7 +343,8 @@ pub async fn burn_intents(
     _controller: web::Data<Arc<ZCashController>>,
 ) -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
-        "status": "not_implemented"
+        "status": "not_implemented",
+        "note": "Withdrawals are handled by MPC nodes"
     }))
 }
 
@@ -474,6 +364,7 @@ pub async fn internal_attestations(
     _controller: web::Data<Arc<ZCashController>>,
 ) -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
-        "status": "not_implemented"
+        "status": "deprecated",
+        "note": "Attestations are now submitted directly during scanning"
     }))
 }

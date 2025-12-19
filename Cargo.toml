@@ -46,6 +46,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 tokio-stream = "0.1"
 actix-cors = "0.7.1"
+
+# Serialization for Solana transactions
+bincode = "1.3"
+sha2 = "0.10"
+
 solana-sdk = "3.0.0"
 
 [build-dependencies]
