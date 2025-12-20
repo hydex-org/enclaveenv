@@ -101,7 +101,7 @@ pub async fn provision_ufvk(
         .get_ufvk()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let manager = AddressManager::from_ufvk(&ufvk)
+    let manager = AddressManager::from_ufvk(&ufvk).await
         .map_err(|e| {
             error!("Failed to initialize AddressManager: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
