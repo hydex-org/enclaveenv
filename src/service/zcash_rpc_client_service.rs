@@ -166,7 +166,7 @@ impl ZCashRpcClientService {
         // Check if UFVK was provided at startup
         let (orchard_scanner, address_manager) = if !cli.ufvk.is_empty() {
             println!("\n=== Decoding UFVK ===");
-            match Self::init_with_ufvk(&cli.ufvk, network, &enclave_provisioner) {
+            match Self::init_with_ufvk(&cli.ufvk, network, &enclave_provisioner).await {
                 Ok((scanner, manager)) => {
                     println!("Scanner and address manager initialized");
                     (Some(scanner), Some(manager))
@@ -202,7 +202,7 @@ impl ZCashRpcClientService {
     }
 
     /// Initialize scanner and address manager from UFVK
-    fn init_with_ufvk(
+    async fn init_with_ufvk(
         ufvk_str: &str,
         network: Network,
         _provisioner: &EnclaveProvisioner,
@@ -232,7 +232,7 @@ impl ZCashRpcClientService {
             .ok_or_else(|| anyhow::anyhow!("No Orchard FVK in UFVK"))?;
 
         let scanner = OrchardScanner::new(&fvk_bytes)?;
-        let manager = AddressManager::from_ufvk(ufvk_str)?;
+        let manager = AddressManager::from_ufvk(ufvk_str).await?;
 
         // Load persisted mappings from disk
         match manager.load_mappings() {
@@ -371,9 +371,9 @@ impl ZCashRpcClientService {
     // ========================================================================
 
     /// Initialize scanner and address manager after API provisioning
-    pub fn init_after_provisioning(&mut self) -> Result<()> {
+    pub async fn init_after_provisioning(&mut self) -> Result<()> {
         let ufvk_str = self.enclave_provisioner.get_ufvk()?;
-        let (scanner, manager) = Self::init_with_ufvk(&ufvk_str, self.network, &self.enclave_provisioner)?;
+        let (scanner, manager) = Self::init_with_ufvk(&ufvk_str, self.network, &self.enclave_provisioner).await?;
         
         self.orchard_scanner = Some(scanner);
         self.address_manager = Some(manager);

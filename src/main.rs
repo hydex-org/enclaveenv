@@ -10,7 +10,9 @@ mod client;
 mod scanner;
 mod manager;
 
+
 use crate::controller::ZCashController;
+use crate::manager::AddressManager;
 
 /// Background scanner configuration
 struct ScannerConfig {
@@ -131,8 +133,9 @@ async fn run_background_scanner(controller: Arc<ZCashController>, config: Scanne
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    dotenvy::dotenv().ok(); // loads .env from current working directory
     println!("Starting Zcash Enclave server...");
-
+    
     let zcash_controller = Arc::new(ZCashController::new().await.unwrap());
 
     // Start background scanner

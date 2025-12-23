@@ -250,7 +250,7 @@ pub async fn provision_enclave(
     
     match service.enclave_provisioner.provision(req).await {
         Ok(resp) => {
-            if let Err(e) = service.init_after_provisioning() {
+            if let Err(e) = service.init_after_provisioning().await {
                 return HttpResponse::InternalServerError().json(serde_json::json!({
                     "error": format!("Provisioning succeeded but initialization failed: {}", e),
                     "enclave_pubkey": resp.enclave_pubkey

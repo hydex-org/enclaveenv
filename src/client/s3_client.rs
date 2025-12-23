@@ -1,29 +1,27 @@
-
-
-use std::{fs, path::Path};
+use std::{fs, path::{Path, PathBuf}};
 
 use aws_sdk_s3::operation::create_multipart_upload::CreateMultipartUploadOutput;
 //use aws_sdk_s3::primitives::ByteStream::from_path;
-use aws_config::meta::region::{self, RegionProviderChain};
-use aws_sdk_s3::{Client, config::Region, operation::delete_objects};
 use crate::client::S3ExampleError;
 use anyhow::{Context, Result};
+use aws_config::{
+    meta::region::{self, RegionProviderChain},
+    BehaviorVersion,
+};
+use aws_sdk_s3::{config::Region, operation::delete_objects, Client};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
-pub struct S3Client{
+pub struct S3Client {
     client: aws_sdk_s3::Client,
     bucket_name: String,
-    key: String,
+    path: String,
 }
 
-impl S3Client{
-
-    pub async fn new(
-        bucket_name: impl Into<String>, 
-        key: impl Into<String>,
-    ) -> Result<Self> {
-        let region_provider = RegionProviderChain::first_try(Region::new("us-west-2"));
-        let config = aws_config::from_env()
+impl S3Client {
+    pub async fn new(bucket_name: impl Into<String>, path: impl Into<String>) -> Result<Self> {
+        let region_provider =
+            RegionProviderChain::default_provider().or_else(Region::new("ca-central-1")); // fallback only
+        let config = aws_config::defaults(BehaviorVersion::latest())
             .region(region_provider)
             .load()
             .await;
@@ -32,73 +30,77 @@ impl S3Client{
         Ok(Self {
             client,
             bucket_name: bucket_name.into(),
-            key: key.into(),
+            path: path.into(),
         })
     }
 
-pub async fn replace_and_upload(
-    &self,
-) -> Result<()> {
-    // clear bucket
-    clear_bucket(&self.client, &self.bucket_name.to_string());
-    // upload to bucket
-    upload_object(&self.client, &self.bucket_name.to_string(), "../../data/address_mappings.json", &self.key.to_string());
-    Ok(())
-}
+    pub async fn replace_and_upload(&self) -> Result<()> {
+        // clear bucket
+        clear_bucket(&self.client, &self.bucket_name.to_string()).await?;
+        // upload to bucket
+        upload_object(
+            &self.client,
+            &self.bucket_name.to_string(),
+            "data/address_mappings.json",
+            &self.path.to_string(),
+        )
+        .await?;
+        Ok(())
+    }
 
-pub async fn download(
-    &self,
-) -> Result<()> {
-        // Choose where you want it saved:
-    let dest_path = Path::new("../../data/address_mappings.json");
+    pub async fn remove_and_download(&self) -> Result<()> {
+        Ok(())
+    }
 
-    // 1) Download (this returns GetObjectOutput with a streaming body)
-    let out = download_object(&self.client, &self.bucket_name, &self.key)
+pub async fn download(&self) -> Result<()> {
+    // 1) Get object
+    let out = self.client
+        .get_object()
+        .bucket(&self.bucket_name)
+        .key(&self.path)
+        .send()
         .await
-        .map_err(|e| anyhow::anyhow!(e))
-        .context("Failed to download object from S3")?;
+        .with_context(|| format!("get_object failed for s3://{}/{}", self.bucket_name, self.path))?;
 
-        // 2) Ensure parent folder exists
+    // 2) Build destination path: <project_root>/data/enclave-mappings.json
+    let mut dest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    dest_path.push("data");
+    dest_path.push("enclave-mappings.json");
+
+    // 3) Ensure parent dir exists
     if let Some(parent) = dest_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("Failed to create dir {}", parent.display()))?;
     }
 
-        // 3) Create/overwrite the destination file
-    let mut file = tokio::fs::File::create(dest_path)
+    // 4) Read bytes (small file) and write
+    let bytes = out.body.collect().await?.into_bytes();
+    tokio::fs::write(&dest_path, &bytes)
         .await
-        .with_context(|| format!("Failed to create {}", dest_path.display()))?;
+        .with_context(|| format!("Failed to write {}", dest_path.display()))?;
 
-    // 4) Stream body -> file
-    let mut reader = out.body.into_async_read(); // requires aws-smithy-types feature "rt-tokio"
-    tokio::io::copy(&mut reader, &mut file)
-        .await
-        .with_context(|| format!("Failed to write to {}", dest_path.display()))?;
-
-    file.flush().await?;
+    println!("Wrote {} bytes to {}", bytes.len(), dest_path.display());
     Ok(())
 }
 
-pub async fn check_mappings_file(
-    &self,
-) -> Result<()> {
-    if(ensure_address_mappings_exists()){
+
+    pub async fn check_mappings_file(&self) -> Result<String> {
         let path = Path::new("../../data/address_mappings.json");
 
-        if path.exists() {
-            fs::remove_file(path)
-                .with_context(|| format!("Failed to delete {}", path.display()))?;
+        if ensure_address_mappings_exists() {
+            if path.exists() {
+                // fs::remove_file(path)
+                //     .with_context(|| format!("Failed to delete {}", path.display()))?;
+            }
+
+            Ok("File in directory already exists".to_string())
+        } else {
+            println!("This path doesn't exist...");
+            self.download().await?;
+            Ok("File missing, downloading...".to_string())
         }
-
-
     }
-    else{   
-        // Download
-        self.download();
-    }
-    Ok(())
-}
 }
 
 pub async fn download_object(
@@ -235,4 +237,3 @@ pub fn ensure_address_mappings_exists() -> bool {
         return false;
     }
 }
-
