@@ -471,14 +471,14 @@ impl ZCashRpcClientService {
         let address_manager = self.address_manager.as_ref().unwrap();
         
         let (unified_address, diversifier_index) = address_manager
-            .generate_deposit_address(&wallet)
+            .generate_deposit_address(&wallet).await
             .map_err(|e| anyhow::anyhow!("Failed to generate address: {}", e))?;
 
-        if let Some(ref am) = self.address_manager {
-            if let Err(e) = am.save_mappings() {
-                eprintln!("Warning: Failed to save address mappings: {}", e);
-            }
-        }
+if let Some(ref am) = self.address_manager {
+    if let Err(e) = am.save_mappings().await {
+        eprintln!("Warning: Failed to save address mappings: {}", e);
+    }
+}
 
         Ok(DepositAddressResponse {
             deposit_address: unified_address.clone(),

@@ -160,7 +160,7 @@ pub async fn generate_deposit_address(
 
     // 4. Generate address
     let (ua, div_index) = manager
-        .generate_deposit_address(&req.solana_pubkey)
+        .generate_deposit_address(&req.solana_pubkey).await
         .map_err(|e| {
             error!("Address generation failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
