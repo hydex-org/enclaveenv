@@ -94,7 +94,7 @@ impl AddressManager {
     /// - Stores mapping: solana_pubkey → (index, address)
     ///
     /// Returns: (unified_address, diversifier_index)
-    pub fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<(String, u32)> {
+    pub async fn generate_deposit_address(&self, solana_pubkey: &str) -> Result<(String, u32)> {
         // Check if user already has an address
         {
             let mappings = self.user_mappings.lock().unwrap();
@@ -129,7 +129,7 @@ impl AddressManager {
         }
 
         // Persist to disk
-        if let Err(e) = self.save_mappings() {
+        if let Err(e) = self.save_mappings().await {
             tracing::warn!("Failed to persist mappings: {}", e);
         }
 
@@ -166,7 +166,7 @@ impl AddressManager {
     }
 
     /// Save mappings to disk
-    pub fn save_mappings(&self) -> Result<()> {
+    pub async fn save_mappings(&self) -> Result<()> {
         let mappings = self.user_mappings.lock().unwrap();
 
         let entries: Vec<MappingEntry> = mappings
@@ -191,6 +191,8 @@ impl AddressManager {
             entries.len(),
             MAPPINGS_FILE
         );
+
+        self.s3_client.replace_and_upload();
         Ok(())
     }
 

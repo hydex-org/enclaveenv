@@ -34,19 +34,21 @@ impl S3Client {
         })
     }
 
-    pub async fn replace_and_upload(&self) -> Result<()> {
-        // clear bucket
-        clear_bucket(&self.client, &self.bucket_name.to_string()).await?;
-        // upload to bucket
-        upload_object(
-            &self.client,
-            &self.bucket_name.to_string(),
-            "data/address_mappings.json",
-            &self.path.to_string(),
-        )
-        .await?;
-        Ok(())
-    }
+pub async fn replace_and_upload(&self) -> Result<()> {
+    // self.key should be the S3 object key (the thing you pass to get_object)
+    // self.path should be the LOCAL path to the file you want to upload
+
+    upload_object(
+        &self.client,
+        &self.bucket_name,
+        &self.path,   // local file path
+        "enclave-mappings.json",    // s3 object key
+    )
+    .await?;
+
+    Ok(())
+}
+
 
     pub async fn remove_and_download(&self) -> Result<()> {
         Ok(())
